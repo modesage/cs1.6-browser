@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Counter-Strike 1.6 - Browser Edition</title>
+    <style>
+        body {
+            margin: 0;
+            background: #000;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+
+        canvas {
+            width: 100vw;
+            height: 100vh;
+            top: 0;
+            left: 0;
+            position: fixed;
+            opacity: 0;
+            transition: opacity 1s ease-in;
+        }
+
+        /* Loading screen */
+        #loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: radial-gradient(circle, #1a1a1a 0%, #000 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            z-index: 10;
+            transition: opacity 0.5s ease-out;
+        }
+
+        #cs-title {
+            font-size: 2.2rem;
+            font-weight: bold;
+            color: #ffcc00;
+            text-shadow: 2px 2px 8px #000;
+            margin-bottom: 25px;
+        }
+
+        /* Progress bar container */
+        #progress-container {
+            width: 60%;
+            height: 25px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid #ffcc00;
+            border-radius: 5px;
+            overflow: hidden;
+            margin-top: 10px;
+            box-shadow: 0 0 10px #ffcc00;
+        }
+
+        /* Progress bar fill */
+        #progress-bar {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, #ffaa00, #ffcc00);
+            transition: width 0.2s ease;
+        }
+
+        /* Loading status text */
+        #loading-status {
+            margin-top: 15px;
+            font-size: 1rem;
+            text-align: center;
+        }
+
+        /* Fullscreen Button */
+        #fullscreen-btn {
+            display: none;
+            margin-top: 30px;
+            padding: 10px 20px;
+            background: #ffcc00;
+            color: #000;
+            border: none;
+            font-size: 1rem;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: background 0.3s;
+        }
+
+        #fullscreen-btn:hover {
+            background: #ffaa00;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/xash3d-fwgs@latest/dist/raw.js"></script>
+</head>
+<body>
+    <div id="loading-overlay">
+        <div id="cs-title">COUNTER-STRIKE 1.6</div>
+        <div id="progress-container">
+            <div id="progress-bar"></div>
+        </div>
+        <div id="loading-status">Preparing to load...</div>
+        <button id="fullscreen-btn">Go Fullscreen</button>
+    </div>
+    <canvas id="canvas"></canvas>
+
+    <script type="module">
+        import JSZip from 'https://cdn.skypack.dev/jszip@3.10.1';
+
+        const loadingStatus = document.getElementById('loading-status');
+        const progressBar = document.getElementById('progress-bar');
+
+        function updateStatus(msg) {
+            loadingStatus.innerText = msg;
+        }
+
+        function updateProgress(percent) {
+            progressBar.style.width = percent + "%";
+        }
+
+        async function main() {
+            const overlay = document.getElementById('loading-overlay');
+            const canvas = document.getElementById('canvas');
+            const fullscreenBtn = document.getElementById('fullscreen-btn');
+
+            fullscreenBtn.addEventListener('click', () => {
+                if (canvas.requestFullscreen) {
+                    canvas.requestFullscreen();
+                } else if (canvas.webkitRequestFullscreen) {
+                    canvas.webkitRequestFullscreen();
+                } else if (canvas.msRequestFullscreen) {
+                    canvas.msRequestFullscreen();
+                }
+            });
+
+            try {
+                updateStatus("Fetching game assets...");
+                const res = await fetch('./valve.zip');
+                const buffer = await res.arrayBuffer();
+
+                updateStatus("Extracting game files...");
+                const zip = await JSZip.loadAsync(buffer);
+                const files = {};
+
+                const entries = Object.keys(zip.files);
+                let totalFiles = entries.length;
+                let loaded = 0;
+
+                await Promise.all(entries.map(async p => {
+                    const file = zip.files[p];
+                    if (file.dir) return;
+                    files[`/rodir/${p}`] = await file.async("uint8array");
+                    loaded++;
+                    updateProgress(Math.floor((loaded / totalFiles) * 100));
+                    updateStatus(`Loading files... (${loaded}/${totalFiles})`);
+                }));
+
+                updateStatus("Initializing game engine...");
+
+                Xash3D({
+                    arguments: ['-windowed', '-game', 'cstrike', '+_vgui_menus', '0'], 
+                    canvas,
+                    ctx: canvas.getContext('webgl2', {
+                        alpha: false,
+                        depth: true,
+                        stencil: true,
+                        antialias: true
+                    }),
+                    dynamicLibraries: [
+                        "filesystem_stdio.wasm",
+                        "libref_gles3compat.wasm",
+                        "cl_dlls/menu_emscripten_wasm32.wasm",
+                        "dlls/cs_emscripten_wasm32.so",
+                        "cl_dlls/client_emscripten_wasm32.wasm",
+                        "/rwdir/filesystem_stdio.so",
+                    ],
+                    onRuntimeInitialized: function () {
+                        Object.keys(files).forEach(k => {
+                            const dir = k.split('/').slice(0, -1).join('/');
+                            this.FS.mkdirTree(dir);
+                            this.FS.writeFile(k, files[k]);
+                        });
+                        this.FS.chdir('/rodir');
+
+                        updateProgress(100);
+                        updateStatus("Ready! Click 'Go Fullscreen' to play.");
+                        fullscreenBtn.style.display = 'inline-block';
+
+                        fullscreenBtn.addEventListener('click', () => {
+                            overlay.style.opacity = 0;
+                            setTimeout(() => overlay.remove(), 500);
+                            canvas.style.opacity = 1;
+                        });
+                    },
+                    locateFile: (p) => {
+                        switch (p) {
+                            case 'xash.wasm':
+                                return 'https://cdn.jsdelivr.net/npm/xash3d-fwgs@latest/dist/xash.wasm';
+                            case '/rwdir/filesystem_stdio.so':
+                            case 'filesystem_stdio.wasm':
+                                return 'https://cdn.jsdelivr.net/npm/xash3d-fwgs@latest/dist/filesystem_stdio.wasm';
+                            case 'libref_gles3compat.wasm':
+                                return 'https://cdn.jsdelivr.net/npm/xash3d-fwgs@latest/dist/libref_gles3compat.wasm';
+                            case 'cl_dlls/menu_emscripten_wasm32.wasm':
+                                return 'https://cdn.jsdelivr.net/npm/cs16-client@latest/dist/cl_dll/menu_emscripten_wasm32.wasm';
+                            case 'dlls/cs_emscripten_wasm32.so':
+                                return 'https://cdn.jsdelivr.net/npm/cs16-client@latest/dist/dlls/cs_emscripten_wasm32.so';
+                            case 'cl_dlls/client_emscripten_wasm32.wasm':
+                                return 'https://cdn.jsdelivr.net/npm/cs16-client@latest/dist/cl_dll/client_emscripten_wasm32.wasm';
+                            default:
+                                return p;
+                        }
+                    },
+                });
+            } catch (e) {
+                updateStatus("Failed to load game. Check console.");
+                console.error("Failed to load game:", e);
+            }
+        }
+
+        main();
+    </script>
+</body>
+</html>
