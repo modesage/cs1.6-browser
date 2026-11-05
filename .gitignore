@@ -1,3 +1,10 @@
-get_cs_assets/cs
-get_cs_assets/steamcmd
+# Downloaded game files + SteamCMD (large, and not redistributable)
+get_cs_assets/cs/
+get_cs_assets/steamcmd/
 valve.zip
+valve.tmp.*.zip
+
+# Misc
+node_modules/
+.DS_Store
+Thumbs.db
